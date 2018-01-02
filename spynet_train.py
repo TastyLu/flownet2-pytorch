@@ -91,6 +91,7 @@ if args.level > 4 :
 def scaleFlow(flow, height, width):
     #scale the original flow (u,v) to ((x+u)/w,(y+v)/h)
     #input flow B*2*u*v
+    #TODO
     coord = torch.FloatTensor()
 
     for id0, item0 in enumerate(flow):
@@ -160,7 +161,7 @@ def computeInitFlowL4(imagesL4):
 def makeData(images, flows):
     # input: 2 images 1 flow
     # images: numpy ndarray
-
+    # TODO
 
     if args.level == 1:
         initFlow = torch.zeros(2, args.fineHeight, args.fineWidth)
