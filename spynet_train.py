@@ -201,8 +201,8 @@ def makeData(images, flows):
         flowDiffOutput = scaleFlow(flows, args.fineHeight, args.fineWidth)
         flowDiffOutput = flowDiffOutput.add(flowDiffOutput, -1, initFlow)
 
-    _img2 = images_scaled[{{4, 6}, {}, {}}].clone()
-    images_scaled[{{4, 6}, {}, {}}].copy(image.warp(_img2, initFlow.index(1, torch.LongTensor{2, 1})))
+    _img2 = images_scaled[3:6, :, :].clone()
+    images_scaled[3:6, :, :].copy(image.warp(_img2, initFlow.index(1, torch.LongTensor{2, 1})))
     imageFlowInputs = torch.cat(images_scaled, initFlow.float(), 1)
     return imageFlowInputs, flowDiffOutput
 
@@ -221,7 +221,6 @@ model.load_state_dict(torch.load("./pth_fine/fcn-deconv-100.pth"))
 model.train()
 
 
-
 for epoch in range(epochs):
     running_loss = 0.0
     iter_loss = 0.0
@@ -229,14 +228,14 @@ for epoch in range(epochs):
         imageFlowInputs, flowDiffOutput = makeData(data, target)
 
         if torch.cuda.is_available():
-            data, target = [Variable(d.cuda()) for d in data], [Variable(t.cuda()) for t in target]
+            data, target = [Variable(d.cuda()) for d in imageFlowInputs], [Variable(t.cuda()) for t in flowDiffOutput]
         else:
-            data, target = [Variable(d) for d in data], [Variable(t) for t in target]
+            data, target = [Variable(d) for d in imageFlowInputs], [Variable(t) for t in flowDiffOutput]
 
 
         optimizer.zero_grad()
-        outputs = model(data[0])
-        loss = epeLoss(outputs, target[0])
+        outputs = model(data)
+        loss = epeLoss(outputs, target)
         loss.backward()
         optimizer.step()
         running_loss += loss.data[0]
