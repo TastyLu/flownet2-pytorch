@@ -5,8 +5,6 @@ from torch.nn import init
 import math
 import numpy as np
 
-from submodules import *
-
 
 class SpyNet(nn.Module):
 
