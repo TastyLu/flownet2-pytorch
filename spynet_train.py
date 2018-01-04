@@ -47,10 +47,10 @@ args = parser.parse_args()
 args.crop_size = [384, 512]
 args.inference_size = [384, 512]
 
-train_dataset = datasets.FlyingChairs(args, is_cropped=True, root='/path/to/FlyingChairs_release/data', replicates=1)
+train_dataset = datasets.FlyingChairs(args, is_cropped=True, root='/home/luwei/mpi-sintel/training', replicates=1)
 train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=True, num_workers=4, pin_memory=True)
 
-validation_dataset = datasets.FlyingChairs(args, is_cropped=True, root='/path/to/FlyingChairs_release/data',
+validation_dataset = datasets.FlyingChairs(args, is_cropped=True, root='/home/luwei/mpi-sintel/training',
                                            replicates=1)
 validation_loader = DataLoader(validation_dataset, batch_size=args.batchSize, shuffle=True, num_workers=4,
                                pin_memory=True)
