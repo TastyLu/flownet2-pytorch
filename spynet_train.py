@@ -47,10 +47,10 @@ args = parser.parse_args()
 args.crop_size = [384, 512]
 args.inference_size = [384, 512]
 
-train_dataset = datasets.FlyingChairs(args, is_cropped=True, root='/home/luwei/mpi-sintel/training', replicates=1)
+train_dataset = datasets.MpiSintel(args, is_cropped=True, root='/home/luwei/mpi-sintel/training', replicates=1)
 train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=True, num_workers=4, pin_memory=True)
 
-validation_dataset = datasets.FlyingChairs(args, is_cropped=True, root='/home/luwei/mpi-sintel/training',
+validation_dataset = datasets.MpiSintel(args, is_cropped=True, root='/home/luwei/mpi-sintel/training',
                                            replicates=1)
 validation_loader = DataLoader(validation_dataset, batch_size=args.batchSize, shuffle=True, num_workers=4,
                                pin_memory=True)
@@ -174,7 +174,7 @@ def makeData(images, flows):
 
         images_scaled = torch.cat([trans1(images[0]), trans1(images[1])], 0) # 6*h*w
         initFlow = torch.zeros(1, 2, args.fineHeight / 2 ** 4, args.fineWidth / 2 ** 4)
-        flowDiffOutput = torch.stack([scale1(flows[0]), scale1(flows[1])]) # 2*h*w
+        flowDiffOutput = F.avg_pool2d(flows, 2**4) # 2*h*w
 
     elif args.level == 2:
 
@@ -211,14 +211,16 @@ def makeData(images, flows):
 
     _img2 = images_scaled[3:6, :, :].clone()
     _img2 = torch.unsqueeze(_img2, 0).cuda()
+    #print initFlow.size(), _img2.size()
     warper = FlowWarper(initFlow.size(2), initFlow.size(3))
-    images_scaled[3:6, :, :] = torch.squeeze(warper(_img2, initFlow), 0)
+    images_scaled[3:6, :, :] = torch.squeeze(warper(_img2, initFlow), 0).data
     imageFlowInputs = torch.cat([images_scaled, torch.squeeze(initFlow, 0)], 0)
     return imageFlowInputs, torch.squeeze(flowDiffOutput, 0)
 
 
 if torch.cuda.is_available():
-    model = torch.nn.DataParallel(SpyNet(), device_ids=list(range(args.number_gpus)))
+    spyNet = SpyNet.SpyNet(args)
+    model = nn.parallel.DataParallel(spyNet, device_ids=list(range(args.number_gpus)))
     model.cuda()
     torch.cuda.manual_seed(args.seed)
 
@@ -226,40 +228,47 @@ epochs = 201
 lr = 1e-4
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
-epeLoss = losses.L1Loss()
+epeLoss = losses.L1Loss(args)
 #model.load_state_dict(torch.load("./pth_fine/fcn-deconv-100.pth"))
 model.train()
 
 for epoch in range(epochs):
-    running_loss = 0.0
-    iter_loss = 0.0
+    running_l1_loss = 0.0
+    running_epe_loss = 0.0
+    iter_l1_loss = 0.0
+    iter_epe_loss = 0.0
     for batch_idx, (data, target) in enumerate(train_loader):
-        data = data[0].cuda()
-        target = target[0].cuda()
+	data = data[0]
+        target = target[0]
         imageFlowList = []
         flowDiffList = []
-        for idx in range(args.batchSize):
+	batchSize = data.size(0)
+        for idx in range(batchSize):
             # should do multi thread
             image, flow = makeData(data[idx], target[idx])
             imageFlowList.append(image)
             flowDiffList.append(flow)
 
-        imageFlowInputs = Variable(torch.stack(imageFlowList))
-        flowDiffOutputs = Variable(torch.stack(flowDiffList))
+        imageFlowInputs = Variable(torch.stack(imageFlowList).cuda())
+        flowDiffOutputs = torch.stack(flowDiffList).cuda()
 
         optimizer.zero_grad()
         outputs = model(imageFlowInputs)
         loss = epeLoss(outputs, flowDiffOutputs)
-        loss.backward()
+	#print loss
+        #loss.backward()
         optimizer.step()
-        running_loss += loss.data[0]
-        iter_loss += loss.data[0]
+        running_l1_loss += loss[0].data[0]
+        running_epe_loss += loss[1].data[0]
+        iter_l1_loss += loss[0].data[0]
+        iter_epe_loss += loss[1].data[0]
         if (batch_idx + 1) % 100 == 0:
-            print("Iter [%d] Loss: %.4f" % (batch_idx + 1, iter_loss / 100.0))
-            iter_loss = 0.0
-
-    print("Epoch [%d] Loss: %.4f" % (epoch + 1, running_loss / batch_idx))
-    running_loss = 0
+            print("Iter [%d] L1Loss: %.4f EPELoss: %.4f" % (batch_idx + 1, iter_l1_loss / 100.0, iter_epe_loss / 100.0))
+            iter_l1_loss = 0.0
+            iter_epe_loss = 0.0
+    print("Epoch [%d] L1Loss: %.4f EPELoss: %.4f" % (epoch + 1, running_l1_loss / batch_idx, running_epe_loss / 100.0))
+    running_l1_loss = 0
+    running_epe_loss = 0
 
     if (epoch + 1) % 50 == 0:
         lr /= 10.0
