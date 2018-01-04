@@ -18,7 +18,8 @@ import models, losses, datasets
 from utils import flow_utils
 import SpyNet
 from spynet_transform import FlowWarper
-from skimage import io, transform
+from torchvision import transforms
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=1)
@@ -92,6 +93,8 @@ if args.level > 4:
 
 
 def computeInitFlowL1(imagesL1):
+    # imageL1 B*6*h*w
+    # flow_est B*2*h*w
     h = imagesL1.size(3)
     w = imagesL1.size(4)
     batchSize = imagesL1.size(1)
@@ -104,6 +107,7 @@ def computeInitFlowL1(imagesL1):
 
 
 def computeInitFlowL2(imagesL2):
+    # imageL2 B*6*h*w
     h = imagesL2.size(3)
     w = imagesL2.size(4)
     imagesL1 = down2(imagesL2.clone())
@@ -149,55 +153,68 @@ def computeInitFlowL4(imagesL4):
 
 
 def makeData(images, flows):
-    # input: 2 images 1 flow
-    # images: numpy ndarray
-    # TODO
+    # input images 3*2*h*w Tensor
+    # input flows 2*h*w
+    # output imageFlowInputs 8*h'*w'
+    # output flowDiffOutput 2*h'*w'
+
+    # transform to 2*3*h*w
+    images = images.permute(1,0,2,3)
+    scale1 = transforms.Resize((args.fineHeight / 2 ** 4, args.fineWidth / 2 ** 4))
+    trans1 = transforms.Compose([transforms.ToPILImage(), scale1, transforms.ToTensor()])
+    scale2 = transforms.Resize((args.fineHeight / 2 ** 3, args.fineWidth / 2 ** 3))
+    trans2 = transforms.Compose([transforms.ToPILImage(), scale2, transforms.ToTensor()])
+    scale3 = transforms.Resize((args.fineHeight / 2 ** 2, args.fineWidth / 2 ** 2))
+    trans3 = transforms.Compose([transforms.ToPILImage(), scale3, transforms.ToTensor()])
+    scale4 = transforms.Resize((args.fineHeight / 2 ** 1, args.fineWidth / 2 ** 1))
+    trans4 = transforms.Compose([transforms.ToPILImage(), scale4, transforms.ToTensor()])
+
 
     if args.level == 1:
-        initFlow = torch.zeros(2, args.fineHeight, args.fineWidth)
-        flowDiffOutput = flows
+
+        images_scaled = torch.cat([trans1(images[0]), trans1(images[1])], 0) # 6*h*w
+        initFlow = torch.zeros(1, 2, args.fineHeight / 2 ** 4, args.fineWidth / 2 ** 4)
+        flowDiffOutput = torch.stack([scale1(flows[0]), scale1(flows[1])]) # 2*h*w
 
     elif args.level == 2:
-        coarseImages = transform.scale(images, 0.5)
-        initFlow = computeInitFlowL1(
-            coarseImages.resize(1, coarseImages.size(1), coarseImages.size(2), coarseImages.size(3)).cuda())
-        initFlow = scaleFlow(initFlow.squeeze().float(), args.fineHeight, args.fineWidth)
 
-        flowDiffOutput = scaleFlow(flows, args.fineHeight, args.fineWidth)
-        flowDiffOutput = flowDiffOutput.add(flowDiffOutput, -1, initFlow)
+        images_scaled = torch.cat([trans2(images[0]), trans2(images[1])], 0)
+
+        imageL1 = torch.cat([trans1(images[0]), trans1(images[1])], 0)
+        initFlow = computeInitFlowL1(torch.unsqueeze(imageL1, 0).cuda())
+        initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear') # B*2*h*w
+        flowDiffOutput = torch.unsqueeze(torch.stack([scale2(flows[0]), scale2(flows[1])]), 0) - initFlow #B*2*h*w
 
     elif args.level == 3:
-        coarseImages = transform.scale(images, 0.5)
-        initFlow = computeInitFlowL2(coarseImages.resize(1, coarseImages.size(1),
-                                                         coarseImages.size(2), coarseImages.size(3)).cuda())
-        initFlow = scaleFlow(initFlow.squeeze().float(), args.fineHeight, args.fineWidth)
+        images_scaled = torch.cat([trans3(images[0]), trans3(images[1])], 0)
 
-        flowDiffOutput = scaleFlow(flows, args.fineHeight, args.fineWidth)
-        flowDiffOutput = flowDiffOutput.add(flowDiffOutput, -1, initFlow)
+        imageL2 = torch.cat([trans2(images[0]), trans2(images[1])], 0)
+        initFlow = computeInitFlowL2(torch.unsqueeze(imageL2, 0).cuda())
+        initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear')
+        flowDiffOutput = torch.unsqueeze(torch.stack([scale3(flows[0]), scale3(flows[1])]), 0) - initFlow
 
     elif args.level == 4:
-        coarseImages = transform.scale(images, args.fineWidth / 2, args.fineHeight / 2)
-        initFlow = computeInitFlowL3(coarseImages.resize(1, coarseImages.size(1),
-                                                         coarseImages.size(2), coarseImages.size(3)).cuda())
-        initFlow = scaleFlow(initFlow.squeeze().float(), args.fineHeight, args.fineWidth)
+        images_scaled = torch.cat([trans4(images[0]), trans4(images[1])], 0)
 
-        flowDiffOutput = scaleFlow(flows, args.fineHeight, args.fineWidth)
-        flowDiffOutput = flowDiffOutput.add(flowDiffOutput, -1, initFlow)
+        imageL3 = torch.cat([trans3(images[0]), trans3(images[1])], 0)
+        initFlow = computeInitFlowL3(torch.unsqueeze(imageL3, 0).cuda())
+        initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear')
+        flowDiffOutput = torch.unsqueeze(torch.stack([scale4(flows[0]), scale4(flows[1])]), 0) - initFlow
 
     elif args.level == 5:
-        coarseImages = transform.scale(images, args.fineWidth / 2, args.fineHeight / 2)
-        initFlow = computeInitFlowL4(coarseImages.resize(1, coarseImages.size(1),
-                                                         coarseImages.size(2), coarseImages.size(3)).cuda())
-        initFlow = scaleFlow(initFlow.squeeze().float(), args.fineHeight, args.fineWidth)
+        images_scaled = torch.cat([images[0], images[1]], 0)
 
-        flowDiffOutput = scaleFlow(flows, args.fineHeight, args.fineWidth)
-        flowDiffOutput = flowDiffOutput.add(flowDiffOutput, -1, initFlow)
+        imageL4 = torch.cat([trans4(images[0]), trans4(images[1])], 0)
+        initFlow = computeInitFlowL4(torch.unsqueeze(imageL4, 0).cuda())
+        initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear')
+        flowDiffOutput = torch.unsqueeze(torch.stack([flows[0], flows[1]]), 0) - initFlow
 
     _img2 = images_scaled[3:6, :, :].clone()
-    images_scaled[3:6, :, :].copy(image.warp(_img2, initFlow.index(1, torch.LongTensor
-    {2, 1})))
-    imageFlowInputs = torch.cat(images_scaled, initFlow.float(), 1)
-    return imageFlowInputs, flowDiffOutput
+    _img2 = torch.unsqueeze(_img2, 0).cuda()
+    warper = FlowWarper(initFlow.size(2), initFlow.size(3))
+    images_scaled[3:6, :, :] = torch.squeeze(warper(_img2, initFlow), 0)
+    imageFlowInputs = torch.cat([images_scaled, torch.squeeze(initFlow, 0)], 0)
+    return imageFlowInputs, torch.squeeze(flowDiffOutput, 0)
 
 
 if torch.cuda.is_available():
@@ -210,23 +227,29 @@ lr = 1e-4
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
 epeLoss = losses.L1Loss()
-model.load_state_dict(torch.load("./pth_fine/fcn-deconv-100.pth"))
+#model.load_state_dict(torch.load("./pth_fine/fcn-deconv-100.pth"))
 model.train()
 
 for epoch in range(epochs):
     running_loss = 0.0
     iter_loss = 0.0
     for batch_idx, (data, target) in enumerate(train_loader):
-        imageFlowInputs, flowDiffOutput = makeData(data, target)
+        data = data[0].cuda()
+        target = target[0].cuda()
+        imageFlowList = []
+        flowDiffList = []
+        for idx in range(args.batchSize):
+            # should do multi thread
+            image, flow = makeData(data[idx], target[idx])
+            imageFlowList.append(image)
+            flowDiffList.append(flow)
 
-        if torch.cuda.is_available():
-            data, target = [Variable(d.cuda()) for d in imageFlowInputs], [Variable(t.cuda()) for t in flowDiffOutput]
-        else:
-            data, target = [Variable(d) for d in imageFlowInputs], [Variable(t) for t in flowDiffOutput]
+        imageFlowInputs = Variable(torch.stack(imageFlowList))
+        flowDiffOutputs = Variable(torch.stack(flowDiffList))
 
         optimizer.zero_grad()
-        outputs = model(data)
-        loss = epeLoss(outputs, target)
+        outputs = model(imageFlowInputs)
+        loss = epeLoss(outputs, flowDiffOutputs)
         loss.backward()
         optimizer.step()
         running_loss += loss.data[0]
@@ -241,6 +264,6 @@ for epoch in range(epochs):
     if (epoch + 1) % 50 == 0:
         lr /= 10.0
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
-        torch.save(model.state_dict(), "./pth/fcn-deconv-%d.pth" % (epoch + 1))
+        torch.save(model.state_dict(), "./pth/spynet-L%d-%d.pth" % (args.level, epoch + 1))
 
-torch.save(model.state_dict(), "./pth/fcn-deconv.pth")
+torch.save(model.state_dict(), "./pth/spynet-L%d.pth" % (args.level))
