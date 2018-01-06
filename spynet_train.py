@@ -95,8 +95,8 @@ if args.level > 4:
 def computeInitFlowL1(imagesL1):
     # imageL1 B*6*h*w
     # flow_est B*2*h*w
-    h = imagesL1.size(3)
-    w = imagesL1.size(4)
+    h = imagesL1.size(2)
+    w = imagesL1.size(3)
     batchSize = imagesL1.size(1)
 
     _flowappend = torch.cuda.FloatTensor(batchSize, 2, h, w).fill_(0)
@@ -108,8 +108,8 @@ def computeInitFlowL1(imagesL1):
 
 def computeInitFlowL2(imagesL2):
     # imageL2 B*6*h*w
-    h = imagesL2.size(3)
-    w = imagesL2.size(4)
+    h = imagesL2.size(2)
+    w = imagesL2.size(3)
     imagesL1 = down2(imagesL2.clone())
     _flowappend = F.upsample(computeInitFlowL1(imagesL1), scale_factor=2, mode='bilinear')
     warp2 = FlowWarper(h, w)
@@ -123,8 +123,8 @@ def computeInitFlowL2(imagesL2):
 
 
 def computeInitFlowL3(imagesL3):
-    h = imagesL3.size(3)
-    w = imagesL3.size(4)
+    h = imagesL3.size(2)
+    w = imagesL3.size(3)
     imagesL2 = down3(imagesL3.clone())
     _flowappend = F.upsample(computeInitFlowL2(imagesL2), scale_factor=2, mode='bilinear')
     warp3 = FlowWarper(h, w)
@@ -138,8 +138,8 @@ def computeInitFlowL3(imagesL3):
 
 
 def computeInitFlowL4(imagesL4):
-    h = imagesL4.size(3)
-    w = imagesL4.size(4)
+    h = imagesL4.size(2)
+    w = imagesL4.size(3)
     imagesL3 = down4(imagesL4.clone())
     _flowappend = F.upsample(computeInitFlowL3(imagesL3), scale_factor=2, mode='bilinear')
     warp4 = FlowWarper(h, w)
