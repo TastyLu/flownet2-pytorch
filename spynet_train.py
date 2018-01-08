@@ -40,6 +40,8 @@ parser.add_argument('-L2', type=str, default='models/modelL2_4.t7', help='Traine
 parser.add_argument('-L3', type=str, default='models/modelL3_4.t7', help='Trained Level 3 model')
 parser.add_argument('-L4', type=str, default='models/modelL4_4.t7', help='Trained Level 4 model')
 
+parser.add_argument('-mpi_data_path', type=str, default='/home/luwei/mpi-sintel/training', help='mpi sintel data path')
+parser.add_argument('-chairs_data_path', type=str, default='/home/luwei/FlyingChairs/FlyingChairs_release/data', help='mpi sintel data path')
 # parser.add_argument('--crop_size', type=int, nargs='+', default = [256, 256], help="Spatial dimension to crop training samples for training")
 # parser.add_argument('--inference_size', type=int, nargs='+', default = [-1,-1], help='spatial size divisible by 64. default (-1,-1) - largest possible valid size would be used')
 args = parser.parse_args()
@@ -47,13 +49,12 @@ args = parser.parse_args()
 args.crop_size = [384, 512]
 args.inference_size = [384, 512]
 
-train_dataset = datasets.MpiSintel(args, is_cropped=True, root='/home/luwei/mpi-sintel/training', replicates=1)
+train_dataset = datasets.FlyingChairs(args, is_cropped=True, root=args.chairs_data_path, replicates=1)
+#train_dataset = datasets.MpiSintel(args, is_cropped=True, root=args.mpi_data_path, replicates=1)
 train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=True, num_workers=4, pin_memory=True)
 
-validation_dataset = datasets.MpiSintel(args, is_cropped=True, root='/home/luwei/mpi-sintel/training',
-                                           replicates=1)
-validation_loader = DataLoader(validation_dataset, batch_size=args.batchSize, shuffle=True, num_workers=4,
-                               pin_memory=True)
+validation_dataset = datasets.MpiSintel(args, is_cropped=True, root=args.mpi_data_path, replicates=1)
+validation_loader = DataLoader(validation_dataset, batch_size=args.batchSize, shuffle=True, num_workers=4, pin_memory=True)
 
 modelL1path = args.L1
 modelL2path = args.L2
@@ -173,7 +174,7 @@ def makeData(images, flows):
     if args.level == 1:
 
         images_scaled = torch.cat([trans1(images[0]), trans1(images[1])], 0) # 6*h*w
-        initFlow = torch.zeros(1, 2, args.fineHeight / 2 ** 4, args.fineWidth / 2 ** 4)
+        initFlow = torch.zeros(2, args.fineHeight / 2 ** 4, args.fineWidth / 2 ** 4)
         flowDiffOutput = F.avg_pool2d(flows, 2**4) # 2*h*w
 
     elif args.level == 2:
@@ -183,7 +184,8 @@ def makeData(images, flows):
         imageL1 = torch.cat([trans1(images[0]), trans1(images[1])], 0)
         initFlow = computeInitFlowL1(torch.unsqueeze(imageL1, 0).cuda())
         initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear') # B*2*h*w
-        flowDiffOutput = torch.unsqueeze(torch.stack([scale2(flows[0]), scale2(flows[1])]), 0) - initFlow #B*2*h*w
+	initFlow = torch.squeeze(initFlow, 0)
+        flowDiffOutput = F.avg_pool2d(flows, 2**3) - initFlow #B*2*h*w
 
     elif args.level == 3:
         images_scaled = torch.cat([trans3(images[0]), trans3(images[1])], 0)
@@ -191,7 +193,8 @@ def makeData(images, flows):
         imageL2 = torch.cat([trans2(images[0]), trans2(images[1])], 0)
         initFlow = computeInitFlowL2(torch.unsqueeze(imageL2, 0).cuda())
         initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear')
-        flowDiffOutput = torch.unsqueeze(torch.stack([scale3(flows[0]), scale3(flows[1])]), 0) - initFlow
+	initFlow = torch.squeeze(initFlow, 0)
+        flowDiffOutput = F.avg_pool2d(flows, 2**2) - initFlow #B*2*h*w
 
     elif args.level == 4:
         images_scaled = torch.cat([trans4(images[0]), trans4(images[1])], 0)
@@ -199,7 +202,8 @@ def makeData(images, flows):
         imageL3 = torch.cat([trans3(images[0]), trans3(images[1])], 0)
         initFlow = computeInitFlowL3(torch.unsqueeze(imageL3, 0).cuda())
         initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear')
-        flowDiffOutput = torch.unsqueeze(torch.stack([scale4(flows[0]), scale4(flows[1])]), 0) - initFlow
+	initFlow = torch.squeeze(initFlow, 0)
+        flowDiffOutput = F.avg_pool2d(flows, 2**1) - initFlow #B*2*h*w
 
     elif args.level == 5:
         images_scaled = torch.cat([images[0], images[1]], 0)
@@ -207,15 +211,16 @@ def makeData(images, flows):
         imageL4 = torch.cat([trans4(images[0]), trans4(images[1])], 0)
         initFlow = computeInitFlowL4(torch.unsqueeze(imageL4, 0).cuda())
         initFlow = F.upsample(initFlow, scale_factor=2, mode='bilinear')
-        flowDiffOutput = torch.unsqueeze(torch.stack([flows[0], flows[1]]), 0) - initFlow
+	initFlow = torch.squeeze(initFlow, 0)
+        flowDiffOutput = flows - initFlow #B*2*h*w
 
     _img2 = images_scaled[3:6, :, :].clone()
     _img2 = torch.unsqueeze(_img2, 0).cuda()
     #print initFlow.size(), _img2.size()
-    warper = FlowWarper(initFlow.size(2), initFlow.size(3))
-    images_scaled[3:6, :, :] = torch.squeeze(warper(_img2, initFlow), 0).data
-    imageFlowInputs = torch.cat([images_scaled, torch.squeeze(initFlow, 0)], 0)
-    return imageFlowInputs, torch.squeeze(flowDiffOutput, 0)
+    warper = FlowWarper(initFlow.size(1), initFlow.size(2))
+    images_scaled[3:6, :, :] = torch.squeeze(warper(_img2, torch.unsqueeze(initFlow, 0)), 0).data
+    imageFlowInputs = torch.cat([images_scaled, initFlow], 0)
+    return imageFlowInputs, flowDiffOutput
 
 
 if torch.cuda.is_available():
@@ -225,7 +230,7 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(args.seed)
 
 epochs = 201
-lr = 1e-4
+lr = 1e-2
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
 epeLoss = losses.L1Loss(args)
@@ -256,7 +261,7 @@ for epoch in range(epochs):
         outputs = model(imageFlowInputs)
         loss = epeLoss(outputs, flowDiffOutputs)
 	#print loss
-        #loss.backward()
+        loss[1].backward()
         optimizer.step()
         running_l1_loss += loss[0].data[0]
         running_epe_loss += loss[1].data[0]
